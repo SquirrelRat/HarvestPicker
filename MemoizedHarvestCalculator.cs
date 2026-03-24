@@ -184,8 +184,8 @@ public class MemoizedHarvestCalculator
         {
             var (data, entity) = remaining[i];
             if (data == null) continue;
-            values[i] = (
-                entity.GetHashCode(),
+                values[i] = (
+                entity.Address.GetHashCode(),
                 data.Type,
                 (int)(data.T1Plants * 1000),
                 (int)(data.T2Plants * 1000),

@@ -65,6 +65,8 @@ public class HarvestPickerSettings : ISettings
     public RangeNode<float> CropRotationT3UpgradeChance { get; set; } = new RangeNode<float>(0.035f, 0, 1f);
     [Menu("Max Paths Checked", "Limits how many crop rotation paths are checked. Lower is faster but may be less optimal.")]
     public RangeNode<int> MaxPermutations { get; set; } = new RangeNode<int>(50000, 0, 3628800);
+    [Menu("Use Wither Chance", "Apply wither chance discount to deeper plots' value (riskier = less value).")]
+    public ToggleNode UseWitherChance { get; set; } = new ToggleNode(false);
 
     [Menu("Log Detailed Rotation Info", "Writes extra information about the crop rotation calculation to the logs.")]
     public ToggleNode LogDetailedForCropRotation { get; set; } = new ToggleNode(false);

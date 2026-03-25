@@ -124,6 +124,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     private double _cropRotationValue;
     private SeedData _finalPlotSeedData;
     private HashSet<Entity> _lastProcessedEntities;
+    private string _lastSeedDataHash;
     private bool _harvestRotationCompleted;
     private string CachePath => Path.Join(ConfigDirectory, "pricecache.json");
 
@@ -137,7 +138,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     private readonly List<(Entity Entity, HarvestEntityData Data)> _validIrrigators = new();
     private readonly Dictionary<Entity, SeedData> _entitySeedDataCache = new();
 
-    private void ResetHarvestState(bool resetProcessedEntities = false, bool resetIrrigatorPairs = false)
+    private void ResetHarvestState(bool resetProcessedEntities = false, bool resetIrrigatorPairs = false, bool resetHash = false)
     {
         _cropRotationPath = null;
         _cropRotationValue = 0;
@@ -148,11 +149,12 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         _harvestRotationCompleted = false;
         if (resetProcessedEntities) _lastProcessedEntities = null;
         if (resetIrrigatorPairs) _irrigatorPairs = [];
+        if (resetHash) _lastSeedDataHash = null;
     }
 
     public override void AreaChange(AreaInstance area)
     {
-        ResetHarvestState(resetProcessedEntities: true, resetIrrigatorPairs: true);
+        ResetHarvestState(resetProcessedEntities: true, resetIrrigatorPairs: true, resetHash: true);
         _harvestCalculator = null;
         _tickDelayStopwatch.Restart();
         Settings.League.Values = (Settings.League.Values ?? []).Union([PlayerLeague, "Standard", "Hardcore"]).Where(x => x != null).ToList();
@@ -407,11 +409,6 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             _validIrrigators.Add((entity, data));
         }
 
-        if (validCount > 0)
-        {
-            Log($"Tick: Found {validCount} valid irrigators ({pathMatchCount} path matches)");
-        }
-
         if (!_validIrrigators.Any())
         {
             ResetHarvestState();
@@ -591,19 +588,21 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 
         var currentSet = new HashSet<Entity>(_irrigatorPairs.Select(p => p.Item1.Item1).Concat(_irrigatorPairs.Select(p => p.Item2.Item1)).Where(e => e != null));
 
-        if (_lastProcessedEntities == null || !_lastProcessedEntities.SetEquals(currentSet) || _cropRotationPath == null)
+        List<(SeedData Data, Entity Entity)> seedPlots = _irrigatorPairs.SelectMany(p => new[]
+        {
+            (p.Item1.Item3, p.Item1.Item1),
+            (p.Item2.Item3, p.Item2.Item1)
+        }).Where(t => t.Item1 != null && t.Item2 != null).ToList();
+
+        string currentHash = ComputeSeedDataHash(seedPlots);
+        if (_lastProcessedEntities == null || !_lastProcessedEntities.SetEquals(currentSet) || _lastSeedDataHash != currentHash || _cropRotationPath == null)
         {
             ResetHarvestState();
 
-            List<(SeedData Data, Entity Entity)> seedPlots = _irrigatorPairs.SelectMany(p => new[]
-            {
-                (p.Item1.Item3, p.Item1.Item1),
-                (p.Item2.Item3, p.Item2.Item1)
-            }).Where(t => t.Item1 != null && t.Item2 != null).ToList();
-
             if (!seedPlots.Any())
             {
-                _lastProcessedEntities = currentSet; 
+                _lastProcessedEntities = currentSet;
+                _lastSeedDataHash = currentHash;
                 return;
             }
 
@@ -615,7 +614,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                     source.T3Plants * (1 - GetCropRotationChance(3, 4)) + source.T2Plants * GetCropRotationChance(2, 3),
                     source.T4Plants + source.T3Plants * GetCropRotationChance(3, 4));
 
-            _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this);
+            _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this, Settings.UseWitherChance.Value);
             var chanceToNotWither = GameController.IngameState.Data.MapStats
                 .GetValueOrDefault(GameStat.MapHarvestSeedsOfOtherColoursHaveChanceToUpgradeOnCompletingPlot) / 100.0;
 
@@ -670,15 +669,29 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             _cropRotationValue = chosenResult.FinalPlotValue;
             _finalPlotSeedData = chosenResult.FinalPlotData;
             _lastProcessedEntities = currentSet;
+            _lastSeedDataHash = ComputeSeedDataHash(seedPlots);
 
             if (Settings.LogDetailedForCropRotation.Value)
             {
                 _harvestCalculator?.LogCacheStats(Log);
-                _harvestCalculator?.LogDetailedStats(Log);
             }
-
-            
         }
+    }
+
+    private string ComputeSeedDataHash(List<(SeedData Data, Entity Entity)> seedPlots)
+    {
+        var hash = new HashCode();
+        foreach (var (data, entity) in seedPlots.OrderBy(x => x.Entity.Address))
+        {
+            if (data == null || entity == null) continue;
+            hash.Add(entity.Address);
+            hash.Add(data.Type);
+            hash.Add(data.T1Plants);
+            hash.Add(data.T2Plants);
+            hash.Add(data.T3Plants);
+            hash.Add(data.T4Plants);
+        }
+        return hash.ToHashCode().ToString();
     }
 
     private void AdvanceCropRotationPath()

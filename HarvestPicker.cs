@@ -13,9 +13,11 @@ using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.Shared.Enums;
 using ExileCore.Shared.Helpers;
 using HarvestPicker.Api.Response;
+using ImGuiNET;
 using Newtonsoft.Json;
 using SharpDX;
 using Vector2 = System.Numerics.Vector2;
+using Vector4 = System.Numerics.Vector4;
 
 namespace HarvestPicker;
 
@@ -50,6 +52,9 @@ public class RenderItem
 
 public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 {
+    private int _selectedTab = 0;
+    private static readonly string[] SidebarItems = ["General", "Visual Style", "Value Calculation", "Crop Rotation", "Advanced"];
+
     private static readonly HttpClient _httpClient = new HttpClient();
 
     private const float IRRIGATION_PAIRING_DISTANCE = 85f;
@@ -614,7 +619,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                     source.T3Plants * (1 - GetCropRotationChance(3, 4)) + source.T2Plants * GetCropRotationChance(2, 3),
                     source.T4Plants + source.T3Plants * GetCropRotationChance(3, 4));
 
-            _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this, Settings.UseWitherChance.Value);
+            _harvestCalculator = new MemoizedHarvestCalculator(Upgrade, pairLookup, this, Settings.UseWitherChance.Value, Settings.BestFinalPlotsCount.Value);
             var chanceToNotWither = GameController.IngameState.Data.MapStats
                 .GetValueOrDefault(GameStat.MapHarvestSeedsOfOtherColoursHaveChanceToUpgradeOnCompletingPlot) / 100.0;
 
@@ -780,8 +785,8 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                 SEED_TYPE_BLUE => prices.BlueJuiceValue,
                 _ => 0,
             };
-            calculatedValue = Settings.SeedsPerT1Plant.Value * typeToPrice * data.T1Plants +
-                              Settings.SeedsPerT2Plant.Value * typeToPrice * data.T2Plants +
+            calculatedValue = Settings.SeedsPerT1Plant.Value * Settings.T1DropChance.Value * typeToPrice * data.T1Plants +
+                              Settings.SeedsPerT2Plant.Value * Settings.T2DropChance.Value * typeToPrice * data.T2Plants +
                               Settings.SeedsPerT3Plant.Value * typeToPrice * data.T3Plants +
                               (Settings.SeedsPerT4Plant.Value * typeToPrice + Settings.T4PlantWhiteSeedChance.Value * prices.WhiteJuiceValue) * data.T4Plants;
         }
@@ -813,7 +818,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         if (data == null) return "N/A";
         if (Settings.EvaluationMode.Value == HarvestPickerSettings.EVALUATION_MODE_SSF)
         {
-            return $"T3+: {data.T3Plants + data.T4Plants:F0}";
+            return $"T4:{data.T4Plants:F0} T3:{data.T3Plants:F0}";
         }
         
         var valueSuffix = Settings.EvaluationMode.Value == HarvestPickerSettings.EVALUATION_MODE_TRADE ? "c" : "LF";
@@ -917,29 +922,28 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
                     linesToDraw.Add(("HARVEST ROTATION PLAN", Color.White));
                     linesToDraw.Add(("Harvest Order:", Color.White));
                     var pathTypes = path.Select(p => _entitySeedDataCache.TryGetValue(p, out var sd) ? sd.Type : 0).ToList();
-                    var pathString = string.Join(PATH_ARROW, pathTypes.Select(t => t switch { 1 => "P", 2 => "Y", 3 => "B", _ => "?" })) + $" ({GetPlotValueText(_cropRotationValue, _finalPlotSeedData)})";
+                    var pathString = string.Join(PATH_ARROW, pathTypes.Select(t => t switch { 1 => "P", 2 => "Y", 3 => "B", _ => "?" }));
                     linesToDraw.Add((pathString, Color.White));
                     linesToDraw.Add(("", Color.Transparent));
 
-                    if (initialPlotData != null && _finalPlotSeedData != null)
+                    if (_finalPlotSeedData != null)
                     {
-                        var finalPlotSeedInfo = _finalPlotSeedData;
-                        var plotColorName = finalPlotSeedInfo.Type switch {HarvestPicker.SEED_TYPE_PURPLE => "Purple", HarvestPicker.SEED_TYPE_YELLOW => "Yellow", HarvestPicker.SEED_TYPE_BLUE => "Blue", _ => "Unknown"};
+                        var finalTypeName = GetPlotColorName(_finalPlotSeedData.Type);
+                        var nLabel = Settings.BestFinalPlotsCount.Value >= 2 ? "Best Final 2 Plots" : "Best Final Plot";
 
-                        linesToDraw.Add(($"Predicted Yield ({plotColorName} Plot):", Color.White));
-
-
+                        linesToDraw.Add(($"{nLabel} ({finalTypeName}):", Color.White));
 
                         if (Settings.EvaluationMode.Value == HarvestPickerSettings.EVALUATION_MODE_SSF)
                         {
-                            linesToDraw.Add(("", Color.Transparent));
-                            linesToDraw.Add(($"Current:  {GetPlotValueText(CalculateIrrigatorValue(initialPlotData), initialPlotData)}", Color.Gray));
-                            linesToDraw.Add(($"Expected: {GetPlotValueText(_cropRotationValue, _lastHarvestSequenceResult.AggregatedSeedData)}", Color.White));
+                            linesToDraw.Add(($"  T4:{_finalPlotSeedData.T4Plants:F1}  T3:{_finalPlotSeedData.T3Plants:F1}  T2:{_finalPlotSeedData.T2Plants:F1}  T1:{_finalPlotSeedData.T1Plants:F1}", Color.White));
+                            var t4Color = _finalPlotSeedData.T4Plants >= 1 ? Color.LimeGreen : Color.White;
+                            linesToDraw.Add(($"  Expected T4: {_finalPlotSeedData.T4Plants:F1}", t4Color));
                         }
                         else
                         {
-                            var initialValue = CalculateIrrigatorValue(initialPlotData);
+                            linesToDraw.Add(($"  T4:{_finalPlotSeedData.T4Plants:F1}  T3:{_finalPlotSeedData.T3Plants:F1}  T2:{_finalPlotSeedData.T2Plants:F1}  T1:{_finalPlotSeedData.T1Plants:F1}", Color.White));
                             linesToDraw.Add(("", Color.Transparent));
+                            var initialValue = CalculateIrrigatorValue(initialPlotData);
                             linesToDraw.Add(($"Current:  ~{initialValue:F0}c", Color.Gray));
                             linesToDraw.Add(($"Expected: ~{_cropRotationValue:F0}c", Color.White));
                         }
@@ -1131,4 +1135,340 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 
         return minDistance < IRRIGATION_LABEL_MIN_DISTANCE ? bestLabel : null;
     }
+
+    #region Themed Settings UI
+
+    public override void DrawSettings()
+    {
+        PushSettingsStyle();
+
+        var sidebarHeight = ImGui.GetContentRegionAvail().Y - 60f;
+        if (ImGui.BeginChild("Sidebar", new Vector2(140f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
+        {
+            for (var i = 0; i < SidebarItems.Length; i++)
+            {
+                DrawSidebarItem(SidebarItems[i], i);
+            }
+        }
+        ImGui.EndChild();
+        ImGui.SameLine();
+
+        if (ImGui.BeginChild("Content", new Vector2(ImGui.GetContentRegionAvail().X - 4f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
+        {
+            switch (_selectedTab)
+            {
+                case 0:
+                    DrawGeneralTab();
+                    break;
+                case 1:
+                    DrawVisualStyleTab();
+                    break;
+                case 2:
+                    DrawValueCalculationTab();
+                    break;
+                case 3:
+                    DrawCropRotationTab();
+                    break;
+                case 4:
+                    DrawAdvancedTab();
+                    break;
+            }
+        }
+        ImGui.EndChild();
+
+        PopSettingsStyle();
+    }
+
+    private void DrawSidebarItem(string label, int index)
+    {
+        var color = index == _selectedTab
+            ? new Vector4(0.40f, 0.85f, 1.00f, 1f)
+            : new Vector4(0.50f, 0.65f, 0.80f, 1f);
+
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        if (ImGui.Selectable(label, _selectedTab == index))
+        {
+            _selectedTab = index;
+        }
+        ImGui.PopStyleColor();
+    }
+
+    private void DrawGeneralTab()
+    {
+        ImGui.Text("General");
+        ImGui.Separator();
+
+        Settings.Enable.Value = UiHelpers.Checkbox("Enable Plugin", Settings.Enable.Value);
+
+        ImGui.Spacing();
+        ImGui.Text("Evaluation Mode");
+        if (ImGui.BeginCombo("##EvalMode", Settings.EvaluationMode.Value))
+        {
+            foreach (var mode in Settings.EvaluationMode.Values)
+            {
+                if (ImGui.Selectable(mode, Settings.EvaluationMode.Value == mode))
+                {
+                    Settings.EvaluationMode.Value = mode;
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        ImGui.Spacing();
+        ImGui.Text("Price Fetching");
+        if (ImGui.BeginCombo("League", Settings.League.Value))
+        {
+            foreach (var league in Settings.League.Values)
+            {
+                if (ImGui.Selectable(league, Settings.League.Value == league))
+                {
+                    Settings.League.Value = league;
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        var refreshPeriod = Settings.PriceRefreshPeriodMinutes.Value;
+        ModernSlider("Auto-Refresh (min)", ref refreshPeriod, 5, 60);
+        Settings.PriceRefreshPeriodMinutes.Value = refreshPeriod;
+
+        if (ImGui.Button("Reload Prices Now"))
+        {
+            Settings.ReloadPrices.OnPressed?.Invoke();
+        }
+
+        ImGui.Spacing();
+        ImGui.Text("Display Options");
+        Settings.DrawTargetOnMap.Value = UiHelpers.Checkbox("Draw Target On Map", Settings.DrawTargetOnMap.Value);
+        Settings.ShowPathSummary.Value = UiHelpers.Checkbox("Show Rotation Plan", Settings.ShowPathSummary.Value);
+    }
+
+    private void DrawVisualStyleTab()
+    {
+        ImGui.Text("Visual Style");
+        ImGui.Separator();
+
+        ImGui.Text("Colors");
+        Settings.TargetFrameColor.Value = UiHelpers.ColorPicker("Target Frame Color", Settings.TargetFrameColor.Value);
+
+        ImGui.Spacing();
+        ImGui.Text("Choice Colors");
+        Settings.BadColor.Value = UiHelpers.ColorPicker("Bad Choice", Settings.BadColor.Value);
+        Settings.NeutralColor.Value = UiHelpers.ColorPicker("Neutral Choice", Settings.NeutralColor.Value);
+        Settings.GoodColor.Value = UiHelpers.ColorPicker("Good Choice", Settings.GoodColor.Value);
+
+        ImGui.Spacing();
+        ImGui.Text("Plot Colors");
+        Settings.YellowPlotColor.Value = UiHelpers.ColorPicker("Yellow (Vivid)", Settings.YellowPlotColor.Value);
+        Settings.PurplePlotColor.Value = UiHelpers.ColorPicker("Purple (Wild)", Settings.PurplePlotColor.Value);
+        Settings.BluePlotColor.Value = UiHelpers.ColorPicker("Blue (Primal)", Settings.BluePlotColor.Value);
+    }
+
+    private void DrawValueCalculationTab()
+    {
+        ImGui.Text("Value Calculation");
+        ImGui.Separator();
+        ImGui.TextDisabled("Default values based on community research - adjust with verified data");
+
+        ImGui.Spacing();
+        ImGui.Text("Lifeforce Per Plant");
+
+        var t1Seeds = Settings.SeedsPerT1Plant.Value;
+        ModernSlider("T1 Lifeforce", ref t1Seeds, 0, 300);
+        Settings.SeedsPerT1Plant.Value = t1Seeds;
+
+        var t2Seeds = Settings.SeedsPerT2Plant.Value;
+        ModernSlider("T2 Lifeforce", ref t2Seeds, 0, 300);
+        Settings.SeedsPerT2Plant.Value = t2Seeds;
+
+        var t3Seeds = Settings.SeedsPerT3Plant.Value;
+        ModernSlider("T3 Lifeforce", ref t3Seeds, 0, 300);
+        Settings.SeedsPerT3Plant.Value = t3Seeds;
+
+        var t4Seeds = Settings.SeedsPerT4Plant.Value;
+        ModernSlider("T4 Lifeforce", ref t4Seeds, 0, 900);
+        Settings.SeedsPerT4Plant.Value = t4Seeds;
+
+        ImGui.Spacing();
+        ImGui.Text("Drop Chances");
+
+        var t1Chance = Settings.T1DropChance.Value * 100;
+        ModernSliderFloat("T1 Drop Chance (%)", ref t1Chance, 0, 100);
+        Settings.T1DropChance.Value = t1Chance / 100f;
+
+        var t2Chance = Settings.T2DropChance.Value * 100;
+        ModernSliderFloat("T2 Drop Chance (%)", ref t2Chance, 0, 100);
+        Settings.T2DropChance.Value = t2Chance / 100f;
+
+        var t4WhiteChance = Settings.T4PlantWhiteSeedChance.Value * 100;
+        ModernSliderFloat("Sacred Lifeforce Chance (%)", ref t4WhiteChance, 0, 100);
+        Settings.T4PlantWhiteSeedChance.Value = t4WhiteChance / 100f;
+    }
+
+    private void DrawCropRotationTab()
+    {
+        ImGui.Text("Crop Rotation");
+        ImGui.Separator();
+        ImGui.TextDisabled("T2→T3 and T3→T4 are auto-detected from game map stats");
+
+        ImGui.Spacing();
+        ImGui.Text("Fallback Upgrade Chances");
+
+        var t1Upgrade = Settings.CropRotationT1UpgradeChance.Value * 100;
+        ModernSliderFloat("T1→T2 Chance (%)", ref t1Upgrade, 0, 100);
+        Settings.CropRotationT1UpgradeChance.Value = t1Upgrade / 100f;
+
+        var t2Upgrade = Settings.CropRotationT2UpgradeChance.Value * 100;
+        ModernSliderFloat("T2→T3 Chance (%)", ref t2Upgrade, 0, 100);
+        Settings.CropRotationT2UpgradeChance.Value = t2Upgrade / 100f;
+
+        var t3Upgrade = Settings.CropRotationT3UpgradeChance.Value * 100;
+        ModernSliderFloat("T3→T4 Chance (%)", ref t3Upgrade, 0, 100);
+        Settings.CropRotationT3UpgradeChance.Value = t3Upgrade / 100f;
+
+        ImGui.Spacing();
+        ImGui.Text("Optimization");
+
+        var bestFinalPlots = Settings.BestFinalPlotsCount.Value;
+        ModernSlider("Best Final Plots", ref bestFinalPlots, 1, 2);
+        Settings.BestFinalPlotsCount.Value = bestFinalPlots;
+
+        var maxPermutations = Settings.MaxPermutations.Value;
+        ModernSlider("Max Paths Checked", ref maxPermutations, 1000, 500000);
+        Settings.MaxPermutations.Value = maxPermutations;
+
+        Settings.UseWitherChance.Value = UiHelpers.Checkbox("Apply Wither Chance Discount", Settings.UseWitherChance.Value);
+    }
+
+    private void DrawAdvancedTab()
+    {
+        ImGui.Text("Advanced");
+        ImGui.Separator();
+
+        ImGui.Text("Performance");
+        var loadDelay = Settings.InitialLoadDelay.Value;
+        ModernSlider("Initial Load Delay (ms)", ref loadDelay, 0, 2000);
+        Settings.InitialLoadDelay.Value = loadDelay;
+
+        ImGui.Spacing();
+        ImGui.Text("Debug");
+        Settings.LogDetailedForCropRotation.Value = UiHelpers.Checkbox("Log Detailed Rotation Info", Settings.LogDetailedForCropRotation.Value);
+    }
+
+    private static void PushSettingsStyle()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(10f, 10f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(6f, 3f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 4f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.TabRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 3f);
+
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.02f, 0.08f, 0.15f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.03f, 0.10f, 0.18f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.20f, 0.50f, 0.70f, 0.50f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.06f, 0.18f, 0.30f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.10f, 0.30f, 0.50f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.15f, 0.40f, 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.CheckMark, new Vector4(0.40f, 0.85f, 1.00f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.SliderGrab, new Vector4(0.20f, 0.70f, 0.90f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, new Vector4(0.40f, 0.85f, 1.00f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.08f, 0.25f, 0.45f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.15f, 0.40f, 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.25f, 0.55f, 0.80f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.08f, 0.30f, 0.55f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vector4(0.15f, 0.45f, 0.75f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, new Vector4(0.25f, 0.60f, 0.90f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(0.20f, 0.45f, 0.65f, 0.40f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarBg, new Vector4(0.03f, 0.08f, 0.12f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrab, new Vector4(0.20f, 0.50f, 0.70f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabHovered, new Vector4(0.35f, 0.65f, 0.85f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabActive, new Vector4(0.50f, 0.80f, 1.00f, 1f));
+    }
+
+    private static void PopSettingsStyle()
+    {
+        ImGui.PopStyleVar(9);
+        ImGui.PopStyleColor(20);
+    }
+
+    private bool ModernSlider(string id, ref int value, int min, int max)
+    {
+        float floatValue = value;
+        if (!ModernSliderFloat(id, ref floatValue, min, max))
+        {
+            return false;
+        }
+        value = (int)Math.Round((double)floatValue);
+        return true;
+    }
+
+    private static bool ModernSliderFloat(string id, ref float value, float min, float max)
+    {
+        var labelSize = ImGui.CalcTextSize(id);
+        var valueText = ((int)value).ToString();
+        var valueSize = ImGui.CalcTextSize(valueText);
+        var height = Math.Max(labelSize.Y, valueSize.Y) + 6f;
+        var cursor = ImGui.GetCursorScreenPos();
+        var totalWidth = ImGui.GetContentRegionAvail().X;
+
+        var labelPosition = cursor;
+        var valuePosition = new Vector2(cursor.X + totalWidth - valueSize.X, cursor.Y + (height - valueSize.Y) * 0.5f);
+        var lineStartX = cursor.X + labelSize.X + 12f;
+        var lineEndX = cursor.X + totalWidth - valueSize.X - 12f;
+        var lineLength = lineEndX - lineStartX;
+        var lineY = cursor.Y + height * 0.5f;
+
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(0f, height + 2f));
+        ImGui.PushStyleColor(ImGuiCol.Button, 0);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0);
+        ImGui.PushStyleColor(ImGuiCol.Text, 0);
+        var clicked = ImGui.InvisibleButton($"##{id}", new Vector2(totalWidth, height));
+        ImGui.PopStyleColor(4);
+        ImGui.PopStyleVar();
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddText(labelPosition, UiHelpers.PackColor(0.70f, 0.85f, 1.00f, 1f), id);
+        drawList.AddText(valuePosition, UiHelpers.PackColor(0.40f, 0.90f, 1.00f, 1f), valueText);
+
+        if (lineLength <= 0f || max <= min)
+        {
+            return false;
+        }
+
+        var normalized = Math.Clamp((value - min) / (max - min), 0f, 1f);
+        var dotX = lineStartX + normalized * lineLength;
+
+        drawList.AddLine(new Vector2(lineStartX, lineY), new Vector2(lineEndX, lineY), UiHelpers.PackColor(0.08f, 0.25f, 0.40f, 1f), 2f);
+        drawList.AddLine(new Vector2(lineStartX, lineY), new Vector2(dotX, lineY), UiHelpers.PackColor(0.20f, 0.75f, 0.95f, 0.7f), 2f);
+
+        var isActive = ImGui.IsItemActive();
+        var isHovered = ImGui.IsItemHovered();
+        var dotRadius = isActive ? 7f : isHovered ? 6.5f : 5.5f;
+        var dotColor = isActive
+            ? UiHelpers.PackColor(0.40f, 0.90f, 1.00f, 1.0f)
+            : isHovered
+                ? UiHelpers.PackColor(0.30f, 0.80f, 0.95f, 1.0f)
+                : UiHelpers.PackColor(0.20f, 0.70f, 0.90f, 1.0f);
+
+        drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius, dotColor);
+        drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 2f, UiHelpers.PackColor(0.02f, 0.08f, 0.15f, 1f));
+        drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 3.5f, dotColor);
+
+        if (isActive || (clicked && isHovered))
+        {
+            var mousePosition = ImGui.GetMousePos();
+            var newNormalized = Math.Clamp((mousePosition.X - lineStartX) / lineLength, 0f, 1f);
+            value = Math.Clamp(min + newNormalized * (max - min), min, max);
+            return true;
+        }
+
+        return false;
+    }
+
+    #endregion
 }

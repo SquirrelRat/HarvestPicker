@@ -1478,7 +1478,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             }
         }
 
-        var sliderButtonWidth = lineLength + 20f;
+        var sliderButtonWidth = totalWidth;
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(0f, height + 2f));
         ImGui.PushStyleColor(ImGuiCol.Button, 0);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0);

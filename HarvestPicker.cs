@@ -92,6 +92,10 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
     private const string PLOT_NAME_UNKNOWN_TYPE = "Unknown";
 
     private int _currentCropRotationStep;
+
+    private static readonly Dictionary<string, string> SliderEditBuffers = new();
+    private static string _activeSliderEditId = null;
+
     public override bool Initialise()
     {
         _pricesGetter = LoadPricesFromDisk(false);
@@ -447,7 +451,6 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             ResetHarvestState();
         }
 
-        // Build render list for Render() - no component access allowed in Render!
         BuildRenderList();
 
         return null;
@@ -888,7 +891,6 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
             }
         }
 
-        // Panel rendering
         if (_cropRotationPath is { } path && path.Count > 0 && _currentCropRotationStep < path.Count)
         {
             var currentTargetEntity = path[_currentCropRotationStep];
@@ -1025,7 +1027,6 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         }
         else if (_irrigatorPairs.Any() && _renderList.Any())
         {
-            // Non-crop-rotation mode: highlight best choice
             var bestItem = _renderList.FirstOrDefault(r => r.IsCurrentTarget);
             if (bestItem.ScreenPos != Vector2.Zero)
             {
@@ -1293,15 +1294,15 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         ImGui.Text("Drop Chances");
 
         var t1Chance = Settings.T1DropChance.Value * 100;
-        ModernSliderFloat("T1 Drop Chance (%)", ref t1Chance, 0, 100);
+        ModernSliderFloat("T1 Drop Chance (%)", ref t1Chance, 0, 100, out _);
         Settings.T1DropChance.Value = t1Chance / 100f;
 
         var t2Chance = Settings.T2DropChance.Value * 100;
-        ModernSliderFloat("T2 Drop Chance (%)", ref t2Chance, 0, 100);
+        ModernSliderFloat("T2 Drop Chance (%)", ref t2Chance, 0, 100, out _);
         Settings.T2DropChance.Value = t2Chance / 100f;
 
         var t4WhiteChance = Settings.T4PlantWhiteSeedChance.Value * 100;
-        ModernSliderFloat("Sacred Lifeforce Chance (%)", ref t4WhiteChance, 0, 100);
+        ModernSliderFloat("Sacred Lifeforce Chance (%)", ref t4WhiteChance, 0, 100, out _);
         Settings.T4PlantWhiteSeedChance.Value = t4WhiteChance / 100f;
     }
 
@@ -1315,15 +1316,15 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         ImGui.Text("Fallback Upgrade Chances");
 
         var t1Upgrade = Settings.CropRotationT1UpgradeChance.Value * 100;
-        ModernSliderFloat("T1→T2 Chance (%)", ref t1Upgrade, 0, 100);
+        ModernSliderFloat("T1→T2 Chance (%)", ref t1Upgrade, 0, 100, out _);
         Settings.CropRotationT1UpgradeChance.Value = t1Upgrade / 100f;
 
         var t2Upgrade = Settings.CropRotationT2UpgradeChance.Value * 100;
-        ModernSliderFloat("T2→T3 Chance (%)", ref t2Upgrade, 0, 100);
+        ModernSliderFloat("T2→T3 Chance (%)", ref t2Upgrade, 0, 100, out _);
         Settings.CropRotationT2UpgradeChance.Value = t2Upgrade / 100f;
 
         var t3Upgrade = Settings.CropRotationT3UpgradeChance.Value * 100;
-        ModernSliderFloat("T3→T4 Chance (%)", ref t3Upgrade, 0, 100);
+        ModernSliderFloat("T3→T4 Chance (%)", ref t3Upgrade, 0, 100, out _);
         Settings.CropRotationT3UpgradeChance.Value = t3Upgrade / 100f;
 
         ImGui.Spacing();
@@ -1397,17 +1398,59 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
 
     private bool ModernSlider(string id, ref int value, int min, int max)
     {
-        float floatValue = value;
-        if (!ModernSliderFloat(id, ref floatValue, min, max))
+        if (_activeSliderEditId == id)
         {
+            return HandleSliderTextInput(id, ref value, min, max);
+        }
+
+        float floatValue = value;
+        if (!ModernSliderFloat(id, ref floatValue, min, max, out var valueClicked))
+        {
+            if (valueClicked)
+            {
+                _activeSliderEditId = id;
+                SliderEditBuffers[id] = value.ToString();
+            }
             return false;
         }
+
         value = (int)Math.Round((double)floatValue);
         return true;
     }
 
-    private static bool ModernSliderFloat(string id, ref float value, float min, float max)
+    private static bool HandleSliderTextInput(string id, ref int value, int min, int max)
     {
+        if (!SliderEditBuffers.TryGetValue(id, out var buffer))
+        {
+            buffer = value.ToString();
+            SliderEditBuffers[id] = buffer;
+        }
+
+        ImGui.SetKeyboardFocusHere();
+        if (ImGui.InputText($"##{id}_edit", ref buffer, 10, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
+        {
+            if (int.TryParse(buffer, out var newValue))
+            {
+                value = Math.Clamp(newValue, min, max);
+            }
+            _activeSliderEditId = null;
+            SliderEditBuffers.Remove(id);
+            return true;
+        }
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
+        {
+            _activeSliderEditId = null;
+            SliderEditBuffers.Remove(id);
+        }
+
+        SliderEditBuffers[id] = buffer;
+        return false;
+    }
+
+    private static bool ModernSliderFloat(string id, ref float value, float min, float max, out bool valueClicked)
+    {
+        valueClicked = false;
         var labelSize = ImGui.CalcTextSize(id);
         var valueText = ((int)value).ToString();
         var valueSize = ImGui.CalcTextSize(valueText);
@@ -1422,12 +1465,26 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         var lineLength = lineEndX - lineStartX;
         var lineY = cursor.Y + height * 0.5f;
 
+        var valueRectMin = valuePosition;
+        var valueRectMax = new Vector2(valuePosition.X + valueSize.X, valuePosition.Y + valueSize.Y);
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            var mousePos = ImGui.GetMousePos();
+            if (mousePos.X >= valueRectMin.X && mousePos.X <= valueRectMax.X &&
+                mousePos.Y >= valueRectMin.Y && mousePos.Y <= valueRectMax.Y)
+            {
+                valueClicked = true;
+            }
+        }
+
+        var sliderButtonWidth = lineLength + 20f;
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(0f, height + 2f));
         ImGui.PushStyleColor(ImGuiCol.Button, 0);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0);
         ImGui.PushStyleColor(ImGuiCol.Text, 0);
-        var clicked = ImGui.InvisibleButton($"##{id}", new Vector2(totalWidth, height));
+        var clicked = ImGui.InvisibleButton($"##{id}", new Vector2(sliderButtonWidth, height));
         ImGui.PopStyleColor(4);
         ImGui.PopStyleVar();
 
@@ -1459,7 +1516,7 @@ public class HarvestPicker : BaseSettingsPlugin<HarvestPickerSettings>
         drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 2f, UiHelpers.PackColor(0.02f, 0.08f, 0.15f, 1f));
         drawList.AddCircleFilled(new Vector2(dotX, lineY), dotRadius - 3.5f, dotColor);
 
-        if (isActive || (clicked && isHovered))
+        if (!valueClicked && (isActive || (clicked && isHovered)))
         {
             var mousePosition = ImGui.GetMousePos();
             var newNormalized = Math.Clamp((mousePosition.X - lineStartX) / lineLength, 0f, 1f);
